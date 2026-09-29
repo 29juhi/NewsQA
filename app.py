@@ -4,12 +4,13 @@ from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import faiss
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForQuestionAnswering
 import torch
 from urllib.parse import urlparse
 
 # Loading the models
-qa_pipeline = pipeline("question-answering", model="distilbert-base-cased-distilled-squad")
+qa_tokenizer = AutoTokenizer.from_pretrained("distilbert-base-cased-distilled-squad")
+qa_model = AutoModelForQuestionAnswering.from_pretrained("distilbert-base-cased-distilled-squad")
 model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
 
 st.set_page_config(page_title="News Q&A", page_icon="📰", layout="wide")
@@ -59,13 +60,20 @@ def get_answer(question, all_paragraphs, index, article_sources):
     
     best_answer = None
     best_source = None
-    best_score = 0
+    best_score = float('-inf')
     
     for paragraph, source in zip(candidate_paragraphs, candidate_sources):
-        result = qa_pipeline(question=question, context=paragraph)
-        if result['score'] > best_score:
-            best_score = result['score']
-            best_answer = result['answer']
+        inputs = qa_tokenizer(question, paragraph, return_tensors="pt", truncation=True, max_length=512)
+        with torch.no_grad():
+            outputs = qa_model(**inputs)
+            
+        start_idx = torch.argmax(outputs.start_logits)
+        end_idx = torch.argmax(outputs.end_logits)
+        score = (outputs.start_logits[0][start_idx] + outputs.end_logits[0][end_idx]).item()
+        
+        if score > best_score:
+            best_score = score
+            best_answer = qa_tokenizer.decode(inputs.input_ids[0][start_idx:end_idx+1], skip_special_tokens=True)
             best_source = source
             
     return best_answer, best_source
